@@ -2,6 +2,7 @@
 Predicting the survivors on the famous titanic wreckage
 
 1.1 Objective
+
 Predict survival on the Titanic
 
 1.2 Description
