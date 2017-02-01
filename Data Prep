@@ -1,0 +1,145 @@
+install.packages("stringr")
+install.packages("dplyr")
+install.packages("mice")
+install.packages("VIM")
+install.packages("glmnet")
+
+library("stringr")
+library("dplyr")
+library("RED")
+library("mice")
+library("VIM")
+library("caret")
+library("glmnet")
+library("xgboost")
+
+#Reading in the Datasets
+titanic<-read.csv("C:/Users/rohit/Desktop/Spring' 16/Kaggle/Titanic/Data/train.csv",stringsAsFactors = F)
+test<-read.csv("C:/Users/rohit/Desktop/Spring' 16/Kaggle/Titanic/Data/test.csv",stringsAsFactors = F)
+
+#Creating indicators
+titanic$ind="Train"
+test$ind="Test"
+test$Survived=0
+
+data<-rbind(titanic,test)
+
+
+#Checking for missing values
+mis_sum<-col_missing_count(data)
+#Age + Fare has missing values
+
+
+#Checking the pattern of missing data
+md.pattern(data)
+
+
+aggr_plot <- aggr(data, col=c('navyblue','red'), 
+                  numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=.7, 
+                  gap=3, ylab=c("Histogram of missing data","Pattern"))
+
+
+#Imputing age using Mice
+set.seed(1)
+
+tempData <- mice(data,m=5,maxit=50,meth='rf',seed=500)
+#m- No of datasets that you want to create
+#meth- rf: random forest
+#note that the predictor matrix is not specified, so every other variable will 
+#be used to predict the missing values in a particular variable
+
+#Need to check the imputed missing values
+tempData$imp$Age
+
+#using the first dataset to impute the missing values
+completedData <- complete(tempData,1)
+
+data<-completedData
+
+#FEATURE ENGINEERING
+
+#Extracting title from name
+data$Title <- str_replace_all(data$Name, '(.*, )|(\\..*)', "")
+
+#Modifying title variable
+data$Title <-  gsub("Mme|Ms|Lady|Mlle", "Miss", data$Title)
+data$Title <- gsub("Capt|Col|Don|Dr|Jonkheer|Major|Master|Rev|Sir|the Countess", "Others", data$Title )
+data$Title <-gsub("Othersa", "Others", data$Title )
+
+#Checking for the new distribution
+unique(data$Title)
+
+#Family Size
+data <- data %>% 
+  mutate(Fam_size = as.numeric(SibSp) + as.numeric(Parch) + 1) %>% 
+  mutate(Family = case_when(.$Fam_size == 1 ~ "Single", .$Fam_size >1 & .$Fam_size < 5 ~ "Mid Family", .$Fam_size >4 ~ "Large Family"))
+
+#Checking the distribution of age
+ggplot(data, aes(Age, fill = factor(Survived)),,binwidth=5) + 
+  geom_histogram() 
+
+#Creating Age Groups
+data$agegroup<-NULL
+data$agegroup<-ifelse(data$Age<=5,"less than 5",ifelse(data$Age<=50,"5-55","55 +"))
+
+data$Mother <- 'Not Mother'
+data$Mother[data$Sex == 'female' & data$Parch > 0 & data$Age > 18 & data$Title != 'Miss'] <- 'Mother'
+
+table(data$agegroup)
+table(data$Mother)
+
+# Exploring Fare Distribution
+ggplot(data, aes(Fare, fill = factor(Survived)),,binwidth=5) + 
+  geom_histogram() 
+
+boxplot(data$Fare,data=data,ylim=c(0,100))
+
+#Replacing outliers with the median value
+
+IQR<-IQR(data$Fare)
+upper_cutoff<-quantile(data$Fare,prob=0.75,na.rm=T)+(1.5*IQR)
+fare_treated<-ifelse(data$Fare>upper_cutoff,median(data$Fare,na.rm=T),data$Fare)
+
+cor(data$Survived,data$fare_treated)
+data$fare_treated<-fare_treated
+data$fare_treated<-NULL
+
+#Creating Groupings in Fare Variable
+data$faregroup<-NULL
+data$faregroup<-ifelse(data$Fare<=50,0,1)
+table(data$Survived,data$faregroup)
+cor(data$Survived,data$faregroup)
+
+#Identifying travel groups
+
+# family size via SibSp and Parch
+data$familysize<-data$SibSp+data$Parch+1
+
+# extracting surname
+data$Surname <- sapply(data$Name,  
+                       function(x) strsplit(x, split = '[,.]')[[1]][1])
+
+#Addng family ID
+addFamilyID <- function(data) 
+  {
+  data$FamilyID <- paste0(data$Surname, as.character(data$Fam_size))
+  data[, "FamilyID"] <- as.factor(data[, "FamilyID"])
+  return(data)
+}
+
+data<-addFamilyID(data)
+
+
+
+#Converting to factors
+data$Pclass<-as.factor(data$Pclass)
+data$SibSp<-as.factor(data$SibSp)
+data$Parch<-as.factor(data$Parch)
+data$agegroup<-as.factor(data$agegroup)
+data$Mother<-as.factor(data$Mother)
+
+
+#Extracting training and test data
+titanic_train<-subset(data,ind=="Train")
+titanic_train$Survived<-as.factor(titanic_train$Survived)
+titanic_test<-subset(data,ind=="Test")
